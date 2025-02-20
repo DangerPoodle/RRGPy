@@ -363,7 +363,7 @@ def animate(i):
 
     return scatter_plots + line_plots + annotations
 
-def close():
+def close(_ = None):
     sys.exit(0)
 
 # call the animator. blit=True means only re-draw the parts that have changed.
