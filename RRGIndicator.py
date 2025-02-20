@@ -1,3 +1,5 @@
+import sys
+from typing import List
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -64,44 +66,38 @@ tickers_to_show = tickers.copy()
 
 benchmark = '^STOXX'
 
-tickers_data = yf.download(tickers, period=period, interval="1wk")['Adj Close']
-benchmark_data = yf.download(benchmark, period=period, interval="1wk")['Adj Close']
+tickers_data:pd.DataFrame = yf.download(tickers, period=period, interval="1wk", auto_adjust=True, progress=False)['Close']
+benchmark_df:pd.DataFrame = yf.download(benchmark, period=period, interval="1wk", auto_adjust=True, progress=False)['Close']
+benchmark_data:pd.Series = benchmark_df[benchmark]
 
-stoxx = yf.download(benchmark, period=period, interval="1wk")['Adj Close']
 window = 14
 
-rs_tickers = []
-rsr_tickers = []
-rsr_roc_tickers = []
-rsm_tickers = []
-
-for i in range(len(tickers)):
-    rs_tickers.append(100 * (tickers_data[tickers[i]]/ benchmark_data))
-    rsr_tickers.append((100 + (rs_tickers[i] - rs_tickers[i].rolling(window=window).mean()) / rs_tickers[i].rolling(window=window).std(ddof=0)).dropna())
-    rsr_roc_tickers.append(100 * ((rsr_tickers[i]/ rsr_tickers[i][1]) - 1))
-    rsm_tickers.append((101 + ((rsr_roc_tickers[i] - rsr_roc_tickers[i].rolling(window=window).mean()) / rsr_roc_tickers[i].rolling(window=window).std(ddof=0))).dropna())
-    rsr_tickers[i] = rsr_tickers[i][rsr_tickers[i].index.isin(rsm_tickers[i].index)]
-    rsm_tickers[i] = rsm_tickers[i][rsm_tickers[i].index.isin(rsr_tickers[i].index)]
+rs_tickers:List[pd.Series] = []
+rsr_tickers:List[pd.Series] = []
+rsr_roc_tickers:List[pd.Series] = []
+rsm_tickers:List[pd.Series] = []
 
 def update_rrg():
-    global rs_tickers, rsr_tickers, rsr_roc_tickers, rsm_tickers
-    rs_tickers = []
-    rsr_tickers = []
-    rsr_roc_tickers = []
-    rsm_tickers = []
+    global tickers_data, benchmark_data, window, rs_tickers, rsr_tickers, rsr_roc_tickers, rsm_tickers
+    rs_tickers.clear()
+    rsr_tickers.clear()
+    rsr_roc_tickers.clear()
+    rsm_tickers.clear()
 
     for i in range(len(tickers)):
         rs_tickers.append(100 * (tickers_data[tickers[i]]/ benchmark_data))
         rsr_tickers.append((100 + (rs_tickers[i] - rs_tickers[i].rolling(window=window).mean()) / rs_tickers[i].rolling(window=window).std(ddof=0)).dropna())
-        rsr_roc_tickers.append(100 * ((rsr_tickers[i]/ rsr_tickers[i][1]) - 1))
+        rsr_roc_tickers.append(100 * ((rsr_tickers[i]/ rsr_tickers[i].iloc[1]) - 1))
         rsm_tickers.append((101 + ((rsr_roc_tickers[i] - rsr_roc_tickers[i].rolling(window=window).mean()) / rsr_roc_tickers[i].rolling(window=window).std(ddof=0))).dropna())
         rsr_tickers[i] = rsr_tickers[i][rsr_tickers[i].index.isin(rsm_tickers[i].index)]
         rsm_tickers[i] = rsm_tickers[i][rsm_tickers[i].index.isin(rsr_tickers[i].index)]
 
+update_rrg()
+
 root = tk.Tk()
 root.title('RRG Indicator')
 root.geometry('1000x650')
-root.resizable(False, False)
+root.resizable(True, True)
 # Create scatter plot of JdK RS Ratio vs JdK RS Momentum
 # Upper plot is JdK RS Ratio vs JdK RS Momentum and below is a table of the status of each ticker
 fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]})
@@ -209,7 +205,8 @@ def update_entry(event):
         # Replace in tickers 
         row = event.widget.grid_info()['row']
         # replace dataframe column 
-        tickers_data[symbol] = yf.download(symbol, period=period, interval='1wk')['Adj Close']
+        tmp_df:pd.DataFrame = yf.download(symbol, period=period, interval='1wk', auto_adjust=True, progress=False)['Close']
+        tickers_data[symbol] = tmp_df[symbol]
         # If previous symbol is in the ticker to show list, replace it with the new symbol 
         previous_symbol = tickers_metadata_dict['symbol'][row-1]
 
@@ -272,7 +269,9 @@ for i in range(len(tickers_to_show)):
     price = round(tickers_data[symbol][end_date], 2)
     # Ticker change from start date to end date in percentage
     chg = round((price - tickers_data[symbol][start_date]) / tickers_data[symbol][start_date] * 100, 1)
-    bg_color = get_color(rsr_tickers[i][-1], rsm_tickers[i][-1])
+    if rsr_tickers[i].empty or rsm_tickers[i].empty:
+        continue
+    bg_color = get_color(rsr_tickers[i].iloc[-1], rsm_tickers[i].iloc[-1])
     fg_color = 'white' if bg_color in ['red', 'green'] else 'black'
     symbol_var = tk.StringVar()
     symbol_var.set(symbol)
@@ -337,6 +336,11 @@ def animate(i):
             filtered_rsr_tickers = rsr_tickers[j].loc[(rsr_tickers[j].index > start_date) & (rsr_tickers[j].index <= end_date)]
             filtered_rsm_tickers = rsm_tickers[j].loc[(rsm_tickers[j].index > start_date) & (rsm_tickers[j].index <= end_date)]
             # Update the scatter
+            if filtered_rsr_tickers.empty or filtered_rsm_tickers.empty:
+                scatter_plots[j] = ax[0].scatter([], [])
+                line_plots[j] = ax[0].plot([], [], color='k', alpha=0.2)[0]
+                annotations[j] = ax[0].annotate('', (0, 0), fontsize=8)
+                continue
             color = get_color(filtered_rsr_tickers.values[-1], filtered_rsm_tickers.values[-1])
             scatter_plots[j] = ax[0].scatter(filtered_rsr_tickers.values, filtered_rsm_tickers.values, color=color, s=marker_size)
             # Update the line
@@ -347,19 +351,28 @@ def animate(i):
             annotations[j] = ax[0].annotate(tickers[j], (filtered_rsr_tickers.values[-1], filtered_rsm_tickers.values[-1]))
 
         # Update the price and change 
-        price = round(tickers_data[tickers[j]][end_date], 2)
-        chg = round((price - tickers_data[tickers[j]][start_date]) / tickers_data[tickers[j]][start_date] * 100, 1)
+        price = round(tickers_data[tickers[j]].loc[end_date], 2)
+        chg = round((price - tickers_data[tickers[j]].loc[start_date]) / tickers_data[tickers[j]].loc[start_date] * 100, 1)
         table.grid_slaves(row=j+1, column=2)[0].config(text=price)
         table.grid_slaves(row=j+1, column=3)[0].config(text=chg)
 
-        bg_color = get_color(rsr_tickers[j][end_date], rsm_tickers[j][end_date])
+        bg_color = get_color(rsr_tickers[j].loc[end_date], rsm_tickers[j].loc[end_date])
         fg_color = 'white' if bg_color in ['red', 'green', 'blue'] else 'black'
         for k in range(4):
             table.grid_slaves(row=j+1, column=k)[0].config(bg=bg_color, fg=fg_color)        
 
     return scatter_plots + line_plots + annotations
 
+def close():
+    sys.exit(0)
+
 # call the animator. blit=True means only re-draw the parts that have changed.
 anim = animation.FuncAnimation(fig, animate, frames=60, interval=100, blit=True)
 
-root.mainloop()
+# closing tk window, pressing escape in tk window, or ^C in python window exits
+root.bind('<Escape>',close)
+root.protocol("WM_DELETE_WINDOW", close)
+try:
+    root.mainloop()
+except KeyboardInterrupt:
+    sys.exit(0)
